@@ -1,23 +1,44 @@
 {
   "name": "npatgame",
+  "main": "expo-router/entry",
   "version": "1.0.0",
-  "main": "index.ts",
   "scripts": {
+    "preinstall": "npx npm-force-resolutions",
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web"
   },
   "dependencies": {
-    "expo": "~53.0.10",
+    "@expo/metro-runtime": "^5.0.4",
+    "@react-native/virtualized-lists": "^0.80.0",
+    "@react-navigation/native": "^7.1.14",
+    "expo": "53.0.12",
+    "expo-router": "5.1.0",
     "expo-status-bar": "~2.2.3",
+    "nativewind": "^4.1.23",
     "react": "19.0.0",
-    "react-native": "0.79.3"
+    "react-dom": "19.0.0",
+    "react-native": "0.79.4",
+    "react-native-gesture-handler": "^2.26.0",
+    "react-native-reanimated": "~3.17.4",
+    "react-native-safe-area-context": "^5.4.0",
+    "react-native-screens": "^4.11.1",
+    "react-native-web": "^0.20.0",
+    "socket.io-client": "^4.8.1",
+    "tailwindcss": "^3.4.17"
   },
   "devDependencies": {
-    "@babel/core": "^7.25.2",
+    "@babel/core": "^7.24.7",
     "@types/react": "~19.0.10",
     "typescript": "~5.8.3"
+  },
+  "resolutions": {
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  },
+  "overrides": {
+    "react": "19.0.0"
   },
   "private": true
 }
