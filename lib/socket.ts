@@ -1,5 +1,7 @@
 import { io } from 'socket.io-client';
-const socket = io('http://192.168.0.219:3000', {
+import { SOCKET_SERVER_URL } from '@env';
+
+const socket = io(SOCKET_SERVER_URL, {
     transports: ['websocket'],
 });
 
