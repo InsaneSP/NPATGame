@@ -1,6 +1,17 @@
+const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const server = http.createServer();
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+
+// ✅ Health check endpoint
+app.get('/', (req, res) => {
+    res.send('✅ Socket.IO backend is live!');
+});
+
+const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
         origin: '*',
@@ -389,6 +400,7 @@ function calculateRoundScores(allAnswers, letter) {
     return res;
 }
 
-server.listen(3000, () => {
-    console.log('✅ Socket.IO server running on port 3000');
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`✅ Socket.IO server running on port ${PORT}`);
 });
