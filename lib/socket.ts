@@ -1,8 +1,8 @@
 import { io } from 'socket.io-client';
-import { SOCKET_SERVER_URL } from '@env';
 
-const socket = io(SOCKET_SERVER_URL, {
+const socket = io('https://npatgame.onrender.com', {
     transports: ['websocket'],
+    forceNew: true,
 });
 
 export default socket;
