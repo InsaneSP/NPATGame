@@ -1,7 +1,7 @@
 import { io } from 'socket.io-client';
 
 const socket = io('https://npatgame.onrender.com', {
-    transports: ['websocket'],
+    transports: ['polling', 'websocket'], // 👈 polling first is safer for mobile
     forceNew: true,
 });
 
