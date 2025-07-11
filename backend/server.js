@@ -36,6 +36,7 @@ io.on('connection', socket => {
                 players: [],
                 currentRound: 1,
                 currentLetter: '',
+                usedLetters: [],
                 answers: {},
                 scores: {},
                 statuses: [],
@@ -67,13 +68,13 @@ io.on('connection', socket => {
         const room = rooms[roomId];
         if (!room) return;
 
-        const randomLetter = getRandomLetter();
-        room.currentLetter = randomLetter;
+        room.currentLetter = getRandomLetter(room);
         room.currentRound = 1;
         room.answers = {};
         room.pendingResults = null;
         room.pendingResultsSent = false;
         room.gameEnded = false;
+        room.timeoutHandle = null;
 
         room.statuses = room.players.map(p => ({
             id: p.id,
@@ -107,60 +108,133 @@ io.on('connection', socket => {
 
         console.log(`📝 ${totalSubmitted}/${totalExpected} players submitted in room ${roomId}`);
 
-        if (
-            totalSubmitted === totalExpected &&
-            !room.pendingResultsSent
-        ) {
-            const roundScores = calculateRoundScores(room.answers, room.currentLetter);
+        if (!room.pendingResultsSent) {
+            // ✅ All submitted normally
+            if (totalSubmitted === totalExpected) {
+                if (room.timeoutHandle) {
+                    clearTimeout(room.timeoutHandle);
+                    room.timeoutHandle = null;
+                }
 
-            const roundResult = {};
-            categories.forEach(cat => {
-                roundResult[cat] = room.players.map(p => ({
+                const roundScores = calculateRoundScores(room.answers, room.currentLetter);
+
+                const roundResult = {};
+                categories.forEach(cat => {
+                    roundResult[cat] = room.players.map(p => ({
+                        id: p.id,
+                        player: p.name,
+                        answer: room.answers[p.id]?.[cat] || '',
+                        points: roundScores[p.id]?.perCategory?.[cat] || 0,
+                    }));
+                });
+
+                const summary = room.players.map(p => ({
                     id: p.id,
                     player: p.name,
-                    answer: room.answers[p.id]?.[cat] || '',
-                    points: roundScores[p.id]?.perCategory?.[cat] || 0,
+                    total: roundScores[p.id]?.total || 0,
+                    breakdown: roundScores[p.id]?.perCategory || {},
                 }));
-            });
 
-            const summary = room.players.map(p => ({
-                id: p.id,
-                player: p.name,
-                total: roundScores[p.id]?.total || 0,
-                breakdown: roundScores[p.id]?.perCategory || {},
-            }));
+                const isFinal = false;
+                room.pendingResults = { roundResult, summary, isFinal };
+                room.pendingResultsSent = true;
 
-            const isFinal = false;
-            room.pendingResults = { roundResult, summary, isFinal };
-            room.pendingResultsSent = true;
+                const roundBreakdown = {
+                    round: room.currentRound,
+                    scores: room.players.map(p => {
+                        const playerSummary = summary.find(s => s.player === p.name);
+                        const breakdown = playerSummary?.breakdown || {};
+                        return {
+                            player: p.name,
+                            ...Object.fromEntries(categories.map(c => [c, breakdown[c] || 0])),
+                            total: playerSummary?.total || 0
+                        };
+                    })
+                };
 
-            const roundBreakdown = {
-                round: room.currentRound,
-                scores: room.players.map(p => {
-                    const playerSummary = summary.find(s => s.player === p.name);
-                    const breakdown = playerSummary?.breakdown || {};
-                    return {
-                        player: p.name,
-                        ...Object.fromEntries(categories.map(c => [c, breakdown[c] || 0])),
-                        total: playerSummary?.total || 0
-                    };
-                })
-            };
+                const existingIndex = room.breakdown.findIndex(b => b.round === room.currentRound);
+                if (existingIndex === -1) {
+                    room.breakdown.push(roundBreakdown);
+                } else {
+                    room.breakdown[existingIndex] = roundBreakdown;
+                }
 
-            const existingIndex = room.breakdown.findIndex(b => b.round === room.currentRound);
-            if (existingIndex === -1) {
-                room.breakdown.push(roundBreakdown);
-            } else {
-                room.breakdown[existingIndex] = roundBreakdown;
+                io.to(roomId).emit('roundResults', {
+                    roundNumber: room.currentRound,
+                    results: roundResult,
+                    summary,
+                    isFinal,
+                    letter: room.currentLetter,
+                });
+
             }
+            // ✅ Trigger 10s timer if exactly 2 submitted and >2 total players
+            else if (totalExpected > 2 && totalSubmitted === 2 && !room.timeoutHandle) {
+                console.log(`⏳ Starting 10s timer for room ${roomId}`);
+                io.to(roomId).emit('timerStarted', { duration: 10 });
+                room.timeoutHandle = setTimeout(() => {
+                    console.log(`⌛ Timer ended — auto-submitting remaining players in ${roomId}`);
 
-            io.to(roomId).emit('roundResults', {
-                roundNumber: room.currentRound,
-                results: roundResult,
-                summary,
-                isFinal,
-                letter: room.currentLetter,
-            });
+                    room.players.forEach(p => {
+                        if (!room.answers[p.id]) {
+                            room.answers[p.id] = Object.fromEntries(categories.map(c => [c, '']));
+                        }
+                    });
+
+                    const roundScores = calculateRoundScores(room.answers, room.currentLetter);
+
+                    const roundResult = {};
+                    categories.forEach(cat => {
+                        roundResult[cat] = room.players.map(p => ({
+                            id: p.id,
+                            player: p.name,
+                            answer: room.answers[p.id]?.[cat] || '',
+                            points: roundScores[p.id]?.perCategory?.[cat] || 0,
+                        }));
+                    });
+
+                    const summary = room.players.map(p => ({
+                        id: p.id,
+                        player: p.name,
+                        total: roundScores[p.id]?.total || 0,
+                        breakdown: roundScores[p.id]?.perCategory || {},
+                    }));
+
+                    const isFinal = false;
+                    room.pendingResults = { roundResult, summary, isFinal };
+                    room.pendingResultsSent = true;
+
+                    const roundBreakdown = {
+                        round: room.currentRound,
+                        scores: room.players.map(p => {
+                            const playerSummary = summary.find(s => s.player === p.name);
+                            const breakdown = playerSummary?.breakdown || {};
+                            return {
+                                player: p.name,
+                                ...Object.fromEntries(categories.map(c => [c, breakdown[c] || 0])),
+                                total: playerSummary?.total || 0
+                            };
+                        })
+                    };
+
+                    const existingIndex = room.breakdown.findIndex(b => b.round === room.currentRound);
+                    if (existingIndex === -1) {
+                        room.breakdown.push(roundBreakdown);
+                    } else {
+                        room.breakdown[existingIndex] = roundBreakdown;
+                    }
+
+                    io.to(roomId).emit('roundResults', {
+                        roundNumber: room.currentRound,
+                        results: roundResult,
+                        summary,
+                        isFinal,
+                        letter: room.currentLetter,
+                    });
+
+                    room.timeoutHandle = null;
+                }, 10000);
+            }
         }
     });
 
@@ -248,17 +322,16 @@ io.on('connection', socket => {
         room.answers = {};
         room.pendingResults = null;
         room.pendingResultsSent = false;
+        room.timeoutHandle = null;
 
-        const randomLetter = getRandomLetter();
-        room.currentLetter = randomLetter;
-
+        room.currentLetter = getRandomLetter(room);
         room.statuses = room.players.map(p => ({
             id: p.id,
             name: p.name,
             done: false,
         }));
 
-        io.to(roomId).emit('startRound', { round: room.currentRound, letter: randomLetter });
+        io.to(roomId).emit('startRound', { round: room.currentRound, letter: room.currentLetter });
     });
 
     socket.on('hostValidateScores', ({ roomId, validatedResults }) => {
@@ -348,7 +421,7 @@ io.on('connection', socket => {
 
         // Reset room state (but keep players!)
         room.currentRound = 1;
-        room.currentLetter = getRandomLetter();
+        room.currentLetter = getRandomLetter(room);
         room.answers = {};
         room.scores = {};
         room.statuses = room.players.map(p => ({ id: p.id, name: p.name, done: false }));
@@ -356,6 +429,7 @@ io.on('connection', socket => {
         room.breakdown = [];
         room.pendingResultsSent = false;
         room.gameEnded = false;
+        room.timeoutHandle = null;
 
         // Notify clients to reset to round 1
         io.to(roomId).emit('startRound', {
@@ -366,8 +440,20 @@ io.on('connection', socket => {
 
 });
 
-function getRandomLetter() {
-    return String.fromCharCode(65 + Math.floor(Math.random() * 26));
+function getRandomLetter(room) {
+    const allLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    const unused = allLetters.filter(letter => !room.usedLetters.includes(letter));
+
+    if (unused.length === 0) {
+        // All letters used, reset
+        room.usedLetters = [];
+        return getRandomLetter(room);
+    }
+
+    const randomIndex = Math.floor(Math.random() * unused.length);
+    const selected = unused[randomIndex];
+    room.usedLetters.push(selected);
+    return selected;
 }
 
 function calculateRoundScores(allAnswers, letter) {
