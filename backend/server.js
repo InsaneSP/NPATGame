@@ -109,69 +109,14 @@ io.on('connection', socket => {
         console.log(`📝 ${totalSubmitted}/${totalExpected} players submitted in room ${roomId}`);
 
         if (!room.pendingResultsSent) {
-            // ✅ All submitted normally
-            if (totalSubmitted === totalExpected) {
-                if (room.timeoutHandle) {
-                    clearTimeout(room.timeoutHandle);
-                    room.timeoutHandle = null;
-                }
+            // Always try to emit results after any submission
+            tryEmitRoundResults(roomId);
 
-                const roundScores = calculateRoundScores(room.answers, room.currentLetter);
-
-                const roundResult = {};
-                categories.forEach(cat => {
-                    roundResult[cat] = room.players.map(p => ({
-                        id: p.id,
-                        player: p.name,
-                        answer: room.answers[p.id]?.[cat] || '',
-                        points: roundScores[p.id]?.perCategory?.[cat] || 0,
-                    }));
-                });
-
-                const summary = room.players.map(p => ({
-                    id: p.id,
-                    player: p.name,
-                    total: roundScores[p.id]?.total || 0,
-                    breakdown: roundScores[p.id]?.perCategory || {},
-                }));
-
-                const isFinal = false;
-                room.pendingResults = { roundResult, summary, isFinal };
-                room.pendingResultsSent = true;
-
-                const roundBreakdown = {
-                    round: room.currentRound,
-                    scores: room.players.map(p => {
-                        const playerSummary = summary.find(s => s.player === p.name);
-                        const breakdown = playerSummary?.breakdown || {};
-                        return {
-                            player: p.name,
-                            ...Object.fromEntries(categories.map(c => [c, breakdown[c] || 0])),
-                            total: playerSummary?.total || 0
-                        };
-                    })
-                };
-
-                const existingIndex = room.breakdown.findIndex(b => b.round === room.currentRound);
-                if (existingIndex === -1) {
-                    room.breakdown.push(roundBreakdown);
-                } else {
-                    room.breakdown[existingIndex] = roundBreakdown;
-                }
-
-                io.to(roomId).emit('roundResults', {
-                    roundNumber: room.currentRound,
-                    results: roundResult,
-                    summary,
-                    isFinal,
-                    letter: room.currentLetter,
-                });
-
-            }
-            // ✅ Trigger 10s timer if exactly 2 submitted and >2 total players
-            else if (totalExpected > 2 && totalSubmitted === 2 && !room.timeoutHandle) {
+            // Timer logic only applies to >2 players
+            if (totalExpected > 2 && totalSubmitted === 2 && !room.timeoutHandle) {
                 console.log(`⏳ Starting 10s timer for room ${roomId}`);
                 io.to(roomId).emit('timerStarted', { duration: 10 });
+
                 room.timeoutHandle = setTimeout(() => {
                     console.log(`⌛ Timer ended — auto-submitting remaining players in ${roomId}`);
 
@@ -181,57 +126,7 @@ io.on('connection', socket => {
                         }
                     });
 
-                    const roundScores = calculateRoundScores(room.answers, room.currentLetter);
-
-                    const roundResult = {};
-                    categories.forEach(cat => {
-                        roundResult[cat] = room.players.map(p => ({
-                            id: p.id,
-                            player: p.name,
-                            answer: room.answers[p.id]?.[cat] || '',
-                            points: roundScores[p.id]?.perCategory?.[cat] || 0,
-                        }));
-                    });
-
-                    const summary = room.players.map(p => ({
-                        id: p.id,
-                        player: p.name,
-                        total: roundScores[p.id]?.total || 0,
-                        breakdown: roundScores[p.id]?.perCategory || {},
-                    }));
-
-                    const isFinal = false;
-                    room.pendingResults = { roundResult, summary, isFinal };
-                    room.pendingResultsSent = true;
-
-                    const roundBreakdown = {
-                        round: room.currentRound,
-                        scores: room.players.map(p => {
-                            const playerSummary = summary.find(s => s.player === p.name);
-                            const breakdown = playerSummary?.breakdown || {};
-                            return {
-                                player: p.name,
-                                ...Object.fromEntries(categories.map(c => [c, breakdown[c] || 0])),
-                                total: playerSummary?.total || 0
-                            };
-                        })
-                    };
-
-                    const existingIndex = room.breakdown.findIndex(b => b.round === room.currentRound);
-                    if (existingIndex === -1) {
-                        room.breakdown.push(roundBreakdown);
-                    } else {
-                        room.breakdown[existingIndex] = roundBreakdown;
-                    }
-
-                    io.to(roomId).emit('roundResults', {
-                        roundNumber: room.currentRound,
-                        results: roundResult,
-                        summary,
-                        isFinal,
-                        letter: room.currentLetter,
-                    });
-
+                    tryEmitRoundResults(roomId);
                     room.timeoutHandle = null;
                 }, 10000);
             }
@@ -484,6 +379,66 @@ function calculateRoundScores(allAnswers, letter) {
     });
 
     return res;
+}
+
+function tryEmitRoundResults(roomId) {
+    const room = rooms[roomId];
+    if (!room || room.pendingResultsSent) return;
+
+    const totalSubmitted = Object.keys(room.answers).length;
+    const totalExpected = room.players.length;
+
+    if (totalSubmitted !== totalExpected) return;
+
+    const roundScores = calculateRoundScores(room.answers, room.currentLetter);
+
+    const roundResult = {};
+    categories.forEach(cat => {
+        roundResult[cat] = room.players.map(p => ({
+            id: p.id,
+            player: p.name,
+            answer: room.answers[p.id]?.[cat] || '',
+            points: roundScores[p.id]?.perCategory?.[cat] || 0,
+        }));
+    });
+
+    const summary = room.players.map(p => ({
+        id: p.id,
+        player: p.name,
+        total: roundScores[p.id]?.total || 0,
+        breakdown: roundScores[p.id]?.perCategory || {},
+    }));
+
+    room.pendingResults = { roundResult, summary, isFinal: false };
+    room.pendingResultsSent = true;
+
+    const roundBreakdown = {
+        round: room.currentRound,
+        scores: room.players.map(p => {
+            const playerSummary = summary.find(s => s.player === p.name);
+            const breakdown = playerSummary?.breakdown || {};
+            return {
+                player: p.name,
+                ...Object.fromEntries(categories.map(c => [c, breakdown[c] || 0])),
+                total: playerSummary?.total || 0
+            };
+        })
+    };
+
+    const existingIndex = room.breakdown.findIndex(b => b.round === room.currentRound);
+    if (existingIndex === -1) {
+        room.breakdown.push(roundBreakdown);
+    } else {
+        room.breakdown[existingIndex] = roundBreakdown;
+    }
+
+    io.to(roomId).emit('roundResults', {
+        roundNumber: room.currentRound,
+        results: roundResult,
+        summary,
+        isFinal: false,
+        letter: room.currentLetter,
+    });
 }
 
 const PORT = process.env.PORT || 3000;

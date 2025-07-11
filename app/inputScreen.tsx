@@ -111,6 +111,10 @@ const InputScreen = () => {
     useEffect(() => {
         socket.emit('getPlayerStatuses', roomId);
 
+        const fallback = setTimeout(() => {
+            socket.emit('getFinalResults', { roomId });
+        }, 2000);
+
         socket.on('playerStatusesUpdate', (statusList: PlayerStatus[]) => {
             setPlayerStatuses(statusList);
         });
@@ -177,6 +181,7 @@ const InputScreen = () => {
         }
 
         return () => {
+            clearTimeout(fallback);
             socket.off('playerStatusesUpdate');
             socket.off('answerUpdate');
             socket.off('roundResults');
