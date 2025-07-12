@@ -21,6 +21,7 @@ const io = new Server(server, {
 
 const rooms = {};
 const categories = ['name', 'surname', 'place', 'animalBird', 'thing', 'movie', 'fruitFlower', 'colorDish'];
+const autoSubmitTimers = {};
 
 io.on('connection', socket => {
     let currentRoom = null;
@@ -74,7 +75,6 @@ io.on('connection', socket => {
         room.pendingResults = null;
         room.pendingResultsSent = false;
         room.gameEnded = false;
-        room.timeoutHandle = null;
 
         room.statuses = room.players.map(p => ({
             id: p.id,
@@ -113,12 +113,16 @@ io.on('connection', socket => {
             tryEmitRoundResults(roomId);
 
             // Timer logic only applies to >2 players
-            if (totalExpected > 2 && totalSubmitted === 2 && !room.timeoutHandle) {
+            if (totalExpected > 2 && totalSubmitted === 2 && !autoSubmitTimers[roomId]) {
                 console.log(`⏳ Starting 10s timer for room ${roomId}`);
                 io.to(roomId).emit('timerStarted', { duration: 10 });
 
-                room.timeoutHandle = setTimeout(() => {
+                autoSubmitTimers[roomId] = setTimeout(() => {
                     console.log(`⌛ Timer ended — auto-submitting remaining players in ${roomId}`);
+                    autoSubmitTimers[roomId] = null;
+
+                    const room = rooms[roomId];
+                    if (!room) return;
 
                     room.players.forEach(p => {
                         if (!room.answers[p.id]) {
@@ -127,7 +131,6 @@ io.on('connection', socket => {
                     });
 
                     tryEmitRoundResults(roomId);
-                    room.timeoutHandle = null;
                 }, 10000);
             }
         }
@@ -333,6 +336,30 @@ io.on('connection', socket => {
         });
     });
 
+    socket.on('forceSubmitAnswers', ({ player, roomId, answers }) => {
+        const room = rooms[roomId];
+        if (!room) return;
+
+        const matchedPlayer = room.players.find(p => p.name === player);
+        if (!matchedPlayer) return;
+
+        if (!room.answers[matchedPlayer.id]) {
+            room.answers[matchedPlayer.id] = answers;
+
+            const enrichedStatuses = room.statuses.map(status => ({
+                ...status,
+                answers: room.answers[status.id],
+            }));
+
+            io.to(roomId).emit('answerUpdate', { playerId: matchedPlayer.id, answers });
+            io.to(roomId).emit('playerStatusesUpdate', enrichedStatuses);
+
+            console.log(`📩 Force-submitted answers for ${player} in room ${roomId}`);
+        }
+
+        tryEmitRoundResults(roomId);
+    });
+
 });
 
 function getRandomLetter(room) {
@@ -408,6 +435,11 @@ function tryEmitRoundResults(roomId) {
         total: roundScores[p.id]?.total || 0,
         breakdown: roundScores[p.id]?.perCategory || {},
     }));
+
+    if (autoSubmitTimers[roomId]) {
+        clearTimeout(autoSubmitTimers[roomId]);
+        autoSubmitTimers[roomId] = null;
+    }
 
     room.pendingResults = { roundResult, summary, isFinal: false };
     room.pendingResultsSent = true;

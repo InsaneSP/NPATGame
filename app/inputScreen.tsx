@@ -7,7 +7,9 @@ import {
     ScrollView,
     KeyboardAvoidingView,
     Platform,
-    Vibration
+    Vibration,
+    Keyboard,
+    TouchableWithoutFeedback,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import socket from '../lib/socket';
@@ -100,7 +102,7 @@ const InputScreen = () => {
     const playTimerSound = async () => {
         try {
             const { sound } = await Audio.Sound.createAsync(
-                require('../assets/timer.mp3') // 🔊 Make sure this file exists
+                require('../assets/timer.mp3')
             );
             await sound.playAsync();
         } catch (error) {
@@ -161,14 +163,26 @@ const InputScreen = () => {
             Vibration.vibrate(300);
             playTimerSound();
             setTimer(duration);
+
+            let localCountdown = duration;
             const interval = setInterval(() => {
-                setTimer(prev => {
-                    if (prev <= 1) {
-                        clearInterval(interval);
-                        return 0;
+                localCountdown--;
+                setTimer(prev => (prev <= 1 ? 0 : prev - 1));
+
+                if (localCountdown <= 0) {
+                    clearInterval(interval);
+
+                    // 👇 Auto-submit logic here
+                    if (!submitted) {
+                        console.log("⌛ Auto-submitting with current inputs...");
+                        socket.emit('forceSubmitAnswers', {
+                            player: name,
+                            roomId,
+                            answers: inputs,
+                        });
+                        setSubmitted(true);
                     }
-                    return prev - 1;
-                });
+                }
             }, 1000);
         });
 
@@ -192,72 +206,75 @@ const InputScreen = () => {
 
     return (
         <SafeAreaView className="flex-1 bg-gray-100">
-            <KeyboardAvoidingView
-                behavior="height"
-                className="flex-1"
-            >
-                <ScrollView
-                    className="p-4"
-                    contentContainerStyle={{ paddingBottom: 40 }}
-                    keyboardShouldPersistTaps="handled"
+            <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+                <KeyboardAvoidingView
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                    keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
+                    style={{ flex: 1 }}
                 >
-                    {submitted && !isCurrentHost ? (
-                        <View className="flex-1 justify-center items-center mt-40">
-                            <Text className="text-2xl font-bold text-gray-800 mb-2">🎉 Round Complete</Text>
-                            <Text className="text-base text-gray-600">Waiting for others to submit...</Text>
-                        </View>
-                    ) : (
-                        <>
-                            <View className="bg-white p-5 rounded-2xl shadow-md mb-6">
-                                <Text className="text-lg font-semibold text-gray-800">Round {roundNum}</Text>
-                                <Text className="text-2xl font-bold text-blue-800">Letter: {letter || '...'}</Text>
-                                <Text className="text-sm text-gray-600 mt-1 text-center">
-                                    Type words that start with <Text className="font-bold">"{letter || '?'}"</Text>
-                                </Text>
-                                {isCurrentHost && (
-                                    <Text className="text-sm text-center px-2 py-1 mt-2 rounded-full font-medium bg-yellow-200 text-yellow-900">
-                                        You are the Host
-                                    </Text>
-                                )}
+                    <ScrollView
+                        className="p-4"
+                        contentContainerStyle={{ paddingBottom: 40 }}
+                        keyboardShouldPersistTaps="always"
+                    >
+                        {submitted && !isCurrentHost ? (
+                            <View className="flex-1 justify-center items-center mt-40">
+                                <Text className="text-2xl font-bold text-gray-800 mb-2">🎉 Round {roundNum} Complete</Text>
+                                <Text className="text-base text-gray-600">Waiting for others to submit...</Text>
                             </View>
-
-                            {timer > 0 && (
-                                <View className="mb-4 bg-yellow-100 border border-yellow-300 p-3 rounded-xl">
-                                    <Text className="text-center text-yellow-800 font-semibold">
-                                        ⏳ Hurry! {timer} seconds remaining to submit!
+                        ) : (
+                            <>
+                                <View className="bg-white p-5 rounded-2xl shadow-md mb-6">
+                                    <Text className="text-lg font-semibold text-gray-800">Round {roundNum}</Text>
+                                    <Text className="text-2xl font-bold text-blue-800">Letter: {letter || '...'}</Text>
+                                    <Text className="text-sm text-gray-600 mt-1 text-center">
+                                        Type words that start with <Text className="font-bold">"{letter || '?'}"</Text>
                                     </Text>
+                                    {isCurrentHost && (
+                                        <Text className="text-sm text-center px-2 py-1 mt-2 rounded-full font-medium bg-yellow-200 text-yellow-900">
+                                            You are the Host
+                                        </Text>
+                                    )}
                                 </View>
-                            )}
 
-                            {categories.map(({ key, label }) => (
-                                <View key={key} className="mb-4">
-                                    <Text className="text-base font-medium text-gray-800 mb-1">{label}</Text>
-                                    <TextInput
-                                        className="border border-gray-300 rounded-xl bg-white px-3 py-2 shadow-sm"
-                                        placeholder={`Enter ${label.toLowerCase()}`}
-                                        value={inputs[key as keyof Answers]}
-                                        onChangeText={(text) => handleChange(key as keyof Answers, text)}
-                                        editable={!submitted}
-                                    />
-                                </View>
-                            ))}
+                                {timer > 0 && (
+                                    <View className="mb-4 bg-yellow-100 border border-yellow-300 p-3 rounded-xl">
+                                        <Text className="text-center text-yellow-800 font-semibold">
+                                            ⏳ Hurry! {timer} seconds remaining to submit!
+                                        </Text>
+                                    </View>
+                                )}
 
-                            {submitted ? (
-                                <Text className="text-center bg-green-100 text-green-700 py-2 rounded-xl mt-6 font-medium">
-                                    ✅ Answers Submitted!
-                                </Text>
-                            ) : (
-                                <TouchableOpacity
-                                    className="bg-blue-600 py-3 rounded-xl mt-6 mb-12"
-                                    onPress={handleSubmit}
-                                >
-                                    <Text className="text-center text-white font-semibold text-lg">Submit Answers</Text>
-                                </TouchableOpacity>
-                            )}
-                        </>
-                    )}
-                </ScrollView>
-            </KeyboardAvoidingView>
+                                {categories.map(({ key, label }) => (
+                                    <View key={key} className="mb-4">
+                                        <Text className="text-base font-medium text-gray-800 mb-1">{label}</Text>
+                                        <TextInput
+                                            className="border border-gray-300 rounded-xl bg-white px-3 py-2 shadow-sm"
+                                            placeholder={`Enter ${label.toLowerCase()}`}
+                                            value={inputs[key as keyof Answers]}
+                                            onChangeText={(text) => handleChange(key as keyof Answers, text)}
+                                            editable={!submitted}
+                                        />
+                                    </View>
+                                ))}
+
+                                {submitted ? (
+                                    <Text className="text-center bg-green-100 text-green-700 py-2 rounded-xl mt-6 font-medium">
+                                        ✅ Answers Submitted!
+                                    </Text>
+                                ) : (
+                                    <TouchableOpacity
+                                        className="bg-blue-600 py-3 rounded-xl mt-6 mb-12"
+                                        onPress={handleSubmit}
+                                    >
+                                        <Text className="text-center text-white font-semibold text-lg">Submit Answers</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </>
+                        )}
+                    </ScrollView>
+                </KeyboardAvoidingView>
+            </TouchableWithoutFeedback>
         </SafeAreaView>
     );
 };
