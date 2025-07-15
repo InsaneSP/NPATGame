@@ -86,21 +86,24 @@ io.on('connection', socket => {
         io.to(roomId).emit('startRound', { round: room.currentRound, letter: room.currentLetter });
     });
 
-    socket.on('submitAnswers', ({ player, roomId, answers }) => {
+    socket.on('submitAnswers', ({ roomId, answers }) => {
         const room = rooms[roomId];
         if (!room) return;
 
-        const matchedPlayer = room.players.find(p => p.name === player);
+        // ✅ Directly use socket.id instead of relying on player name
+        const playerId = socket.id;
+        const matchedPlayer = room.players.find(p => p.id === playerId);
         if (!matchedPlayer) return;
 
-        room.answers[matchedPlayer.id] = answers;
+        // ✅ Save the answers under socket.id
+        room.answers[playerId] = answers;
 
         const enrichedStatuses = room.statuses.map(status => ({
             ...status,
             answers: room.answers[status.id],
         }));
 
-        io.to(roomId).emit('answerUpdate', { playerId: matchedPlayer.id, answers });
+        io.to(roomId).emit('answerUpdate', { playerId, answers });
         io.to(roomId).emit('playerStatusesUpdate', enrichedStatuses);
 
         const totalSubmitted = Object.keys(room.answers).length;
@@ -109,10 +112,8 @@ io.on('connection', socket => {
         console.log(`📝 ${totalSubmitted}/${totalExpected} players submitted in room ${roomId}`);
 
         if (!room.pendingResultsSent) {
-            // Always try to emit results after any submission
             tryEmitRoundResults(roomId);
 
-            // Timer logic only applies to >2 players
             if (totalExpected > 2 && totalSubmitted === 2 && !autoSubmitTimers[roomId]) {
                 console.log(`⏳ Starting 10s timer for room ${roomId}`);
                 io.to(roomId).emit('timerStarted', { duration: 10 });

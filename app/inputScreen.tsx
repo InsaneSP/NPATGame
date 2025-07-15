@@ -80,7 +80,7 @@ const InputScreen = () => {
 
     const handleSubmit = () => {
         if (submittedRef.current) return;
-        socket.emit('submitAnswers', { player: name, roomId, answers: inputsRef.current });
+        socket.emit('submitAnswers', { roomId, answers: inputsRef.current });
         setSubmitted(true);
         submittedRef.current = true;
     };
@@ -137,27 +137,24 @@ const InputScreen = () => {
             setTimer(duration);
             setTimeUp(false);
 
+            let remaining = duration;
+
             timerRef.current = setInterval(() => {
-                setTimer(prev => {
-                    const next = prev - 1;
-                    if (next <= 0 && !submittedRef.current) {
-                        clearInterval(timerRef.current!);
-                        timerRef.current = null;
-                        setTimeUp(true);
+                remaining--;
 
-                        console.log('⌛ Auto-submitting current inputs...');
-                        socket.emit('submitAnswers', {
-                            player: name,
-                            roomId,
-                            answers: inputsRef.current,
-                        });
+                setTimer(remaining);
 
-                        setSubmitted(true);
-                        submittedRef.current = true;
-                        return 0;
-                    }
-                    return next;
-                });
+                if (remaining <= 0 && !submittedRef.current) {
+                    clearInterval(timerRef.current!);
+                    timerRef.current = null;
+                    setTimeUp(true);
+
+                    console.log("⏰ Auto-submitting answers:", inputsRef.current);
+                    socket.emit('submitAnswers', { roomId, answers: inputsRef.current });
+
+                    setSubmitted(true);
+                    submittedRef.current = true;
+                }
             }, 1000);
         });
 
