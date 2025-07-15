@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
     View,
     Text,
@@ -10,8 +10,10 @@ import {
     Vibration,
     Keyboard,
     TouchableWithoutFeedback,
+    BackHandler,
+    Alert
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import socket from '../lib/socket';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Audio } from 'expo-av';
@@ -25,19 +27,6 @@ type Answers = {
     movie: string;
     fruitFlower: string;
     colorDish: string;
-};
-
-type PlayerStatus = {
-    id: string;
-    name: string;
-    done: boolean;
-};
-
-type PlayerAnswerView = {
-    id: string;
-    name: string;
-    done: boolean;
-    answers?: Answers;
 };
 
 const categories = [
@@ -66,44 +55,44 @@ const InputScreen = () => {
 
     const router = useRouter();
 
-    const [inputs, setInputs] = useState<Answers>({
-        name: '',
-        surname: '',
-        place: '',
-        animalBird: '',
-        thing: '',
-        movie: '',
-        fruitFlower: '',
-        colorDish: '',
-    });
+    const initialAnswers: Answers = {
+        name: '', surname: '', place: '', animalBird: '', thing: '', movie: '', fruitFlower: '', colorDish: ''
+    };
 
+    const [inputs, setInputs] = useState<Answers>(initialAnswers);
+    const inputsRef = useRef<Answers>(initialAnswers);
     const [submitted, setSubmitted] = useState(false);
-    const [playerStatuses, setPlayerStatuses] = useState<PlayerStatus[]>([]);
-    const [answersById, setAnswersById] = useState<Record<string, Answers>>({});
+    const submittedRef = useRef(false);
+    const [timeUp, setTimeUp] = useState(false);
     const [roundNum, setRoundNum] = useState<number>(parseInt(round) || 1);
     const [letter, setLetter] = useState<string>(initLetter || '');
     const [timer, setTimer] = useState<number>(0);
 
     const isCurrentHost = isHost === 'true';
+    const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const soundRef = useRef<Audio.Sound | null>(null);
 
     const handleChange = (key: keyof Answers, value: string) => {
-        setInputs(prev => ({ ...prev, [key]: value }));
+        const updated = { ...inputsRef.current, [key]: value };
+        inputsRef.current = updated;
+        setInputs(updated);
     };
 
     const handleSubmit = () => {
-        socket.emit('submitAnswers', {
-            player: name,
-            roomId,
-            answers: inputs,
-        });
+        if (submittedRef.current) return;
+        socket.emit('submitAnswers', { player: name, roomId, answers: inputsRef.current });
         setSubmitted(true);
+        submittedRef.current = true;
     };
 
     const playTimerSound = async () => {
         try {
-            const { sound } = await Audio.Sound.createAsync(
-                require('../assets/timer.mp3')
-            );
+            if (soundRef.current) {
+                await soundRef.current.stopAsync();
+                await soundRef.current.unloadAsync();
+            }
+            const { sound } = await Audio.Sound.createAsync(require('../assets/timer.mp3'));
+            soundRef.current = sound;
             await sound.playAsync();
         } catch (error) {
             console.log('Sound error:', error);
@@ -112,111 +101,103 @@ const InputScreen = () => {
 
     useEffect(() => {
         socket.emit('getPlayerStatuses', roomId);
-
-        const fallback = setTimeout(() => {
-            socket.emit('getFinalResults', { roomId });
-        }, 2000);
-
-        socket.on('playerStatusesUpdate', (statusList: PlayerStatus[]) => {
-            setPlayerStatuses(statusList);
-        });
-
-        socket.on('answerUpdate', ({ playerId, answers }) => {
-            setAnswersById(prev => ({
-                ...prev,
-                [playerId]: answers,
-            }));
-        });
+        const fallback = setTimeout(() => socket.emit('getFinalResults', { roomId }), 2000);
 
         socket.on('roundResults', (payload) => {
             if (payload.letter) setLetter(payload.letter);
             setRoundNum(payload.roundNumber);
-            router.replace({
-                pathname: '/resultsScreen',
-                params: {
-                    name,
-                    roomId,
-                    isHost,
-                    round: String(payload.roundNumber),
-                },
-            });
+            clearInterval(timerRef.current!);
+            soundRef.current?.stopAsync();
+            soundRef.current?.unloadAsync();
+            soundRef.current = null;
+
+            router.replace({ pathname: '/resultsScreen', params: { name, roomId, isHost, round: String(payload.roundNumber) } });
         });
 
         socket.on('startRound', ({ round, letter }) => {
+            clearInterval(timerRef.current!);
+            soundRef.current?.stopAsync();
+            soundRef.current?.unloadAsync();
+            soundRef.current = null;
+
+            const fresh = { ...initialAnswers };
+            setInputs(fresh);
+            inputsRef.current = fresh;
+            setSubmitted(false);
+            submittedRef.current = false;
+            setTimeUp(false);
+            setTimer(0);
             setRoundNum(round);
             setLetter(letter);
-            setInputs({
-                name: '',
-                surname: '',
-                place: '',
-                animalBird: '',
-                thing: '',
-                movie: '',
-                fruitFlower: '',
-                colorDish: '',
-            });
-            setSubmitted(false);
-            setTimer(0);
         });
 
         socket.on('timerStarted', ({ duration }) => {
             Vibration.vibrate(300);
             playTimerSound();
             setTimer(duration);
+            setTimeUp(false);
 
-            let localCountdown = duration;
-            const interval = setInterval(() => {
-                localCountdown--;
-                setTimer(prev => (prev <= 1 ? 0 : prev - 1));
+            timerRef.current = setInterval(() => {
+                setTimer(prev => {
+                    const next = prev - 1;
+                    if (next <= 0 && !submittedRef.current) {
+                        clearInterval(timerRef.current!);
+                        timerRef.current = null;
+                        setTimeUp(true);
 
-                if (localCountdown <= 0) {
-                    clearInterval(interval);
-
-                    // 👇 Auto-submit logic here
-                    if (!submitted) {
-                        console.log("⌛ Auto-submitting with current inputs...");
-                        socket.emit('forceSubmitAnswers', {
+                        console.log('⌛ Auto-submitting current inputs...');
+                        socket.emit('submitAnswers', {
                             player: name,
                             roomId,
-                            answers: inputs,
+                            answers: inputsRef.current,
                         });
+
                         setSubmitted(true);
+                        submittedRef.current = true;
+                        return 0;
                     }
-                }
+                    return next;
+                });
             }, 1000);
         });
 
         if (!initLetter) {
             setTimeout(() => {
-                if (!letter) {
-                    socket.emit('getFinalResults', { roomId });
-                }
+                if (!letter) socket.emit('getFinalResults', { roomId });
             }, 1000);
         }
 
         return () => {
             clearTimeout(fallback);
-            socket.off('playerStatusesUpdate');
-            socket.off('answerUpdate');
+            clearInterval(timerRef.current!);
+            soundRef.current?.stopAsync();
+            soundRef.current?.unloadAsync();
+            soundRef.current = null;
             socket.off('roundResults');
             socket.off('startRound');
             socket.off('timerStarted');
         };
     }, []);
 
+    useFocusEffect(
+        React.useCallback(() => {
+            const onBackPress = () => {
+                Alert.alert('Leave Game?', 'Going back will exit the game. Are you sure?', [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Yes', style: 'destructive', onPress: () => router.back() },
+                ]);
+                return true;
+            };
+            const handler = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+            return () => handler.remove();
+        }, [])
+    );
+
     return (
         <SafeAreaView className="flex-1 bg-gray-100">
             <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-                <KeyboardAvoidingView
-                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                    keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
-                    style={{ flex: 1 }}
-                >
-                    <ScrollView
-                        className="p-4"
-                        contentContainerStyle={{ paddingBottom: 40 }}
-                        keyboardShouldPersistTaps="always"
-                    >
+                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0} style={{ flex: 1 }}>
+                    <ScrollView className="p-4" contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="always">
                         {submitted && !isCurrentHost ? (
                             <View className="flex-1 justify-center items-center mt-40">
                                 <Text className="text-2xl font-bold text-gray-800 mb-2">🎉 Round {roundNum} Complete</Text>
@@ -231,17 +212,19 @@ const InputScreen = () => {
                                         Type words that start with <Text className="font-bold">"{letter || '?'}"</Text>
                                     </Text>
                                     {isCurrentHost && (
-                                        <Text className="text-sm text-center px-2 py-1 mt-2 rounded-full font-medium bg-yellow-200 text-yellow-900">
-                                            You are the Host
-                                        </Text>
+                                        <Text className="text-sm text-center px-2 py-1 mt-2 rounded-full font-medium bg-yellow-200 text-yellow-900">You are the Host</Text>
                                     )}
                                 </View>
 
                                 {timer > 0 && (
                                     <View className="mb-4 bg-yellow-100 border border-yellow-300 p-3 rounded-xl">
-                                        <Text className="text-center text-yellow-800 font-semibold">
-                                            ⏳ Hurry! {timer} seconds remaining to submit!
-                                        </Text>
+                                        <Text className="text-center text-yellow-800 font-semibold">⏳ Hurry! {timer} seconds remaining to submit!</Text>
+                                    </View>
+                                )}
+
+                                {timeUp && !submitted && (
+                                    <View className="mb-4 bg-red-100 border border-red-300 p-3 rounded-xl">
+                                        <Text className="text-center text-red-800 font-semibold">⏰ Time's up! Please submit your answers now.</Text>
                                     </View>
                                 )}
 
@@ -253,21 +236,19 @@ const InputScreen = () => {
                                             placeholder={`Enter ${label.toLowerCase()}`}
                                             value={inputs[key as keyof Answers]}
                                             onChangeText={(text) => handleChange(key as keyof Answers, text)}
-                                            editable={!submitted}
+                                            editable={!submitted && !timeUp}
                                         />
                                     </View>
                                 ))}
 
                                 {submitted ? (
-                                    <Text className="text-center bg-green-100 text-green-700 py-2 rounded-xl mt-6 font-medium">
-                                        ✅ Answers Submitted!
-                                    </Text>
+                                    <Text className="text-center bg-green-100 text-green-700 py-2 rounded-xl mt-6 font-medium">✅ Answers Submitted!</Text>
                                 ) : (
                                     <TouchableOpacity
-                                        className="bg-blue-600 py-3 rounded-xl mt-6 mb-12"
+                                        className={`${timeUp ? 'bg-red-600' : 'bg-blue-600'} py-3 rounded-xl mt-6 mb-12`}
                                         onPress={handleSubmit}
                                     >
-                                        <Text className="text-center text-white font-semibold text-lg">Submit Answers</Text>
+                                        <Text className="text-center text-white font-semibold text-lg">{timeUp ? 'Submit (Time Over)' : 'Submit Answers'}</Text>
                                     </TouchableOpacity>
                                 )}
                             </>

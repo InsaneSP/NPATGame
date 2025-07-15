@@ -3,6 +3,8 @@ import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import socket from '../lib/socket';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { BackHandler, Alert } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 
 type CategoryScore = { player: string; answer: string; points: number };
 type RoundResult = Record<string, CategoryScore[]>;
@@ -144,6 +146,29 @@ export default function ResultsScreen() {
         socket.emit('endGame', { roomId });
         router.push({ pathname: '/finalResultsScreen', params: { roomId, name } });
     };
+
+    useFocusEffect(
+        React.useCallback(() => {
+            const onBackPress = () => {
+                Alert.alert(
+                    'Leave Game?',
+                    'Going back will exit the game. Are you sure?',
+                    [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                            text: 'Yes',
+                            style: 'destructive',
+                            onPress: () => router.back(),
+                        },
+                    ]
+                );
+                return true;
+            };
+
+            const backHandler = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+            return () => backHandler.remove();
+        }, [])
+    );
 
     if (!isCurrentHost && !hostReady) {
         return (

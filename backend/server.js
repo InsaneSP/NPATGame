@@ -125,8 +125,12 @@ io.on('connection', socket => {
                     if (!room) return;
 
                     room.players.forEach(p => {
-                        if (!room.answers[p.id]) {
+                        const alreadySubmitted = room.answers[p.id];
+                        if (!alreadySubmitted || Object.values(alreadySubmitted).every(ans => ans.trim() === '')) {
+                            console.log(`⚠️ Auto-submitting blanks for ${p.name}`);
                             room.answers[p.id] = Object.fromEntries(categories.map(c => [c, '']));
+                        } else {
+                            console.log(`✅ ${p.name} already submitted, skipping auto-submit.`);
                         }
                     });
 

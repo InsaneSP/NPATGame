@@ -3,6 +3,8 @@ import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import socket from '../lib/socket';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { BackHandler, Alert } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 
 type PlayerScore = {
     name: string;
@@ -70,6 +72,29 @@ export default function FinalResultsScreen() {
     const onPlayAgain = () => {
         socket.emit('restartGame', { roomId }); // 🔄 Restart logic
     };
+
+    useFocusEffect(
+        React.useCallback(() => {
+            const onBackPress = () => {
+                Alert.alert(
+                    'Leave Game?',
+                    'Going back will exit the game. Are you sure?',
+                    [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                            text: 'Yes',
+                            style: 'destructive',
+                            onPress: () => router.back(),
+                        },
+                    ]
+                );
+                return true;
+            };
+
+            const backHandler = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+            return () => backHandler.remove();
+        }, [])
+    );
 
     return (
         <SafeAreaView className="flex-1 bg-gray-100">
