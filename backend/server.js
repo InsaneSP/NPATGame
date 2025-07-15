@@ -88,12 +88,10 @@ io.on('connection', socket => {
         const room = rooms[roomId];
         if (!room) return;
 
-        // ✅ Directly use socket.id instead of relying on player name
         const playerId = socket.id;
         const matchedPlayer = room.players.find(p => p.id === playerId);
         if (!matchedPlayer) return;
 
-        // ✅ Save the answers under socket.id
         room.answers[playerId] = answers;
         console.log(`📥 Received submission from ${matchedPlayer.name} (${playerId}):`, answers);
 
@@ -110,6 +108,13 @@ io.on('connection', socket => {
 
         console.log(`📝 ${totalSubmitted}/${totalExpected} players submitted in room ${roomId}`);
 
+        // ✅ Start 10s countdown broadcast when exactly 2 players have submitted (no auto-submit)
+        if (totalExpected > 2 && totalSubmitted === 2) {
+            console.log(`⏳ Broadcast timerStarted(10s) in room ${roomId}`);
+            io.to(roomId).emit('timerStarted', { duration: 10 });
+        }
+
+        // ✅ Emit round results only when everyone submits manually
         if (!room.pendingResultsSent && totalSubmitted === totalExpected) {
             tryEmitRoundResults(roomId);
         }
