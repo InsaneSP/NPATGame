@@ -25,10 +25,8 @@ const autoSubmitTimers = {};
 
 io.on('connection', socket => {
     let currentRoom = null;
-    let playerName = null;
 
     socket.on('joinRoom', ({ roomId, name, isHost }) => {
-        playerName = name;
         currentRoom = roomId;
         socket.join(roomId);
 
@@ -97,6 +95,7 @@ io.on('connection', socket => {
 
         // ✅ Save the answers under socket.id
         room.answers[playerId] = answers;
+        console.log(`📥 Received submission from ${matchedPlayer.name} (${playerId}):`, answers);
 
         const enrichedStatuses = room.statuses.map(status => ({
             ...status,
@@ -111,33 +110,8 @@ io.on('connection', socket => {
 
         console.log(`📝 ${totalSubmitted}/${totalExpected} players submitted in room ${roomId}`);
 
-        if (!room.pendingResultsSent) {
+        if (!room.pendingResultsSent && totalSubmitted === totalExpected) {
             tryEmitRoundResults(roomId);
-
-            if (totalExpected > 2 && totalSubmitted === 2 && !autoSubmitTimers[roomId]) {
-                console.log(`⏳ Starting 10s timer for room ${roomId}`);
-                io.to(roomId).emit('timerStarted', { duration: 10 });
-
-                autoSubmitTimers[roomId] = setTimeout(() => {
-                    console.log(`⌛ Timer ended — auto-submitting remaining players in ${roomId}`);
-                    autoSubmitTimers[roomId] = null;
-
-                    const room = rooms[roomId];
-                    if (!room) return;
-
-                    room.players.forEach(p => {
-                        const alreadySubmitted = room.answers[p.id];
-                        if (!alreadySubmitted || Object.values(alreadySubmitted).every(ans => ans.trim() === '')) {
-                            console.log(`⚠️ Auto-submitting blanks for ${p.name}`);
-                            room.answers[p.id] = Object.fromEntries(categories.map(c => [c, '']));
-                        } else {
-                            console.log(`✅ ${p.name} already submitted, skipping auto-submit.`);
-                        }
-                    });
-
-                    tryEmitRoundResults(roomId);
-                }, 10000);
-            }
         }
     });
 
@@ -340,31 +314,6 @@ io.on('connection', socket => {
             letter: room.currentLetter,
         });
     });
-
-    socket.on('forceSubmitAnswers', ({ player, roomId, answers }) => {
-        const room = rooms[roomId];
-        if (!room) return;
-
-        const matchedPlayer = room.players.find(p => p.name === player);
-        if (!matchedPlayer) return;
-
-        if (!room.answers[matchedPlayer.id]) {
-            room.answers[matchedPlayer.id] = answers;
-
-            const enrichedStatuses = room.statuses.map(status => ({
-                ...status,
-                answers: room.answers[status.id],
-            }));
-
-            io.to(roomId).emit('answerUpdate', { playerId: matchedPlayer.id, answers });
-            io.to(roomId).emit('playerStatusesUpdate', enrichedStatuses);
-
-            console.log(`📩 Force-submitted answers for ${player} in room ${roomId}`);
-        }
-
-        tryEmitRoundResults(roomId);
-    });
-
 });
 
 function getRandomLetter(room) {
@@ -440,11 +389,6 @@ function tryEmitRoundResults(roomId) {
         total: roundScores[p.id]?.total || 0,
         breakdown: roundScores[p.id]?.perCategory || {},
     }));
-
-    if (autoSubmitTimers[roomId]) {
-        clearTimeout(autoSubmitTimers[roomId]);
-        autoSubmitTimers[roomId] = null;
-    }
 
     room.pendingResults = { roundResult, summary, isFinal: false };
     room.pendingResultsSent = true;
